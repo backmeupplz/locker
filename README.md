@@ -11,7 +11,7 @@ Lock a position by hand with `PositionManager.transferFrom(owner, lock, tokenId)
 
 | | |
 |---|---|
-| V4PositionLock | `TBD` |
+| V4PositionLock | [`0x490e1952310c49D865F04ae3B70B06FC004cFb36`](https://basescan.org/address/0x490e1952310c49D865F04ae3B70B06FC004cFb36#code) |
 | Beneficiary | `0xbf74483DB914192bb0a9577f3d8Fb29a6d4c08eE` (borodutch.eth) |
 | Unlocks | 2027-11-06 20:00 UTC (`1825531200`) |
 | Uniswap v4 PositionManager | `0x7C5f5A4bBd8fD63184577525326123B519429bDc` |
