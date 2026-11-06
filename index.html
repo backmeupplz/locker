@@ -34,7 +34,6 @@
   button { background: var(--accent); color: #0b0d14; border: 0; border-radius: 8px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
   button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
   button:disabled { opacity: .4; cursor: default; }
-  input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font: inherit; width: 160px; }
   .table { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -54,10 +53,7 @@
   <div class="card kv" id="lockinfo"><span>Lock</span><span class="mono">loading…</span></div>
 
   <div class="card">
-    <div class="row" style="justify-content: space-between">
-      <div class="row"><button id="connect">Connect wallet</button><span id="account" class="mono"></span></div>
-      <div class="row"><input id="newid" placeholder="Position id" inputmode="numeric"><button class="ghost" id="add">Add</button></div>
-    </div>
+    <div class="row"><button id="connect">Connect wallet</button><span id="account" class="mono"></span></div>
     <div class="table" style="margin-top: 12px">
       <table>
         <thead><tr><th>Position</th><th>Pool</th><th>Fee</th><th>Holder</th><th>Unclaimed fees</th></tr></thead>
@@ -77,11 +73,14 @@
 </main>
 
 <script type="module">
-import { keccak_256 } from "https://cdn.jsdelivr.net/npm/@noble/hashes@1.4.0/sha3/+esm";
-
 // ---- config ----
 const LOCK = "0x490e1952310c49D865F04ae3B70B06FC004cFb36"; // V4PositionLock (contracts/deployments/base.json)
-const POSITIONS = [3204056, 3204065, 3204067];
+// Veydrift's positions and their v4 pool ids (no third-party scripts: everything the page signs is built here).
+const POSITIONS = [
+  { id: 3204056, pool: "0x52254cbdbe214d5956d31250f750dac0cdad33b164c3636f28a49f969e1b7154" }, // vMETAL/VEYDRIFT
+  { id: 3204065, pool: "0x09fddc405f13c6c802576601bd31824c4029825301753c17fad07b62aecfb64f" }, // vCRYSTAL/VEYDRIFT
+  { id: 3204067, pool: "0x20aadf49294552454661fc8a57a7beb32b870dc4190a9466629816d8baa713b7" }, // VEYDRIFT/vDEUT
+];
 const PM = "0x7C5f5A4bBd8fD63184577525326123B519429bDc";
 const STATE_VIEW = "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71";
 const RPCS = ["https://mainnet.base.org", "https://base-rpc.publicnode.com"];
@@ -96,8 +95,6 @@ const call = (sel, ...words) => sel + words.join("");
 const words = (hex) => hex.replace(/^0x/, "").match(/.{64}/g) || [];
 const toAddr = (w) => "0x" + w.slice(24);
 const int24 = (v) => BigInt.asIntN(24, v);
-const hex = (bytes) => "0x" + [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
-const keccak = (h) => hex(keccak_256(Uint8Array.from(h.match(/.{2}/g).map((x) => parseInt(x, 16)))));
 const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
 const same = (a, b) => a && b && a.toLowerCase() === b.toLowerCase();
 const ZERO = "0x0000000000000000000000000000000000000000";
@@ -140,11 +137,8 @@ function fmt(v, decimals) {
 
 // ---- state ----
 let eth, account, lockInfo = {}, positions = [];
-const ids = [...new Set([...POSITIONS, ...(new URLSearchParams(location.search).get("ids") || "").split(",").filter(Boolean).map(Number)])];
-const lockReady = LOCK !== ZERO;
 
 async function loadLock() {
-  if (!lockReady) { $("lockinfo").innerHTML = "<span>Lock</span><span>not deployed yet</span>"; return; }
   const [b, u] = await rpc([ethCall(LOCK, "0x38af3eed"), ethCall(LOCK, "0xaa5dec6f")]);
   lockInfo = { beneficiary: toAddr(words(b)[0]), unlockAt: Number(BigInt(u)) };
   const date = new Date(lockInfo.unlockAt * 1000), days = Math.ceil((lockInfo.unlockAt * 1000 - Date.now()) / 864e5);
@@ -153,13 +147,12 @@ async function loadLock() {
     <span>Unlocks</span><span>${date.toUTCString().replace(":00 GMT", " UTC")} (${days > 0 ? `in ${days} days` : "unlocked"})</span>`;
 }
 
-async function loadPosition(id) {
+async function loadPosition({ id, pool: poolId }) {
   const [owner, info] = await rpc([ethCall(PM, call("0x6352211e", word(id))), ethCall(PM, call("0x7ba03aad", word(id)))]);
   const w = words(info);
   const key = { c0: toAddr(w[0]), c1: toAddr(w[1]), fee: Number(BigInt("0x" + w[2])), ts: int24(BigInt("0x" + w[3])), hooks: toAddr(w[4]) };
   const packed = BigInt("0x" + w[5]);
   const lower = int24((packed >> 8n) & 0xffffffn), upper = int24((packed >> 32n) & 0xffffffn);
-  const poolId = keccak(w.slice(0, 5).join(""));
   const [pos, inside] = await rpc([
     ethCall(STATE_VIEW, call("0xdacf1d2f", poolId.slice(2), addr(PM), word(lower), word(upper), word(id))),
     ethCall(STATE_VIEW, call("0x53e9c1fb", poolId.slice(2), word(lower), word(upper))),
@@ -184,7 +177,7 @@ function render() {
   const locked = positions.filter((p) => !p.error && same(p.owner, LOCK));
   const unlocked = lockInfo.unlockAt && Date.now() / 1000 >= lockInfo.unlockAt;
   $("lock").textContent = mine.length ? `Lock ${mine.length} position${mine.length > 1 ? "s" : ""}` : "Lock my positions";
-  $("lock").disabled = !lockReady || !account || !mine.length || unlocked;
+  $("lock").disabled = !account || !mine.length || unlocked;
   $("collect").textContent = locked.length ? `Collect fees from ${locked.length} position${locked.length > 1 ? "s" : ""}` : "Collect all fees";
   $("collect").disabled = !account || !locked.length;
   $("release").hidden = $("withdraw").hidden = !unlocked;
@@ -192,7 +185,7 @@ function render() {
 }
 
 async function refresh() {
-  positions = await Promise.all(ids.map((id) => loadPosition(id).catch(() => ({ id, error: "not found" }))));
+  positions = await Promise.all(POSITIONS.map((p) => loadPosition(p).catch(() => ({ id: p.id, error: "not found" }))));
   render();
 }
 
@@ -250,13 +243,6 @@ async function run(label, calls) {
 }
 
 $("connect").onclick = connect;
-$("add").onclick = async () => {
-  const id = Number($("newid").value);
-  if (!Number.isSafeInteger(id) || id <= 0 || ids.includes(id)) return;
-  ids.push(id); $("newid").value = "";
-  history.replaceState(null, "", "?ids=" + ids.filter((i) => !POSITIONS.includes(i)).join(","));
-  await refresh();
-};
 $("lock").onclick = () => {
   const mine = positions.filter((p) => !p.error && same(p.owner, account));
   if (!confirm(`Lock ${mine.length} position(s) until ${new Date(lockInfo.unlockAt * 1000).toUTCString()}? Nobody can remove the liquidity before then.`)) return;
