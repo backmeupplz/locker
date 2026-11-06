@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "description": "V4PositionLock (plain test / plain deploy, see plain.toml)",
+  "devDependencies": {
+    "plain-evm": "0.5.0"
+  },
+  "scripts": {
+    "test": "plain test",
+    "build": "plain build --check"
+  }
+}

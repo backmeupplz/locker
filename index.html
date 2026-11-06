@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LP Locker</title>
+<meta name="description" content="Lock Uniswap v4 LP positions on Base for a year and collect their fees in one transaction.">
+<meta property="og:title" content="LP Locker">
+<meta property="og:description" content="Lock Uniswap v4 LP positions on Base for a year and collect their fees in one transaction.">
+<meta property="og:url" content="https://locker.borodutch.com">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://locker.borodutch.com/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="LP Locker">
+<meta name="twitter:description" content="Lock Uniswap v4 LP positions on Base for a year and collect their fees in one transaction.">
+<meta name="twitter:image" content="https://locker.borodutch.com/og.png">
+<style>
+  :root { --bg: #0b0d14; --card: #141826; --line: #252b3d; --text: #e7e9f0; --dim: #8b92a8; --accent: #7c8cff; --ok: #4ade80; --bad: #f87171; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  p { margin: 0 0 12px; color: var(--dim); }
+  a { color: var(--accent); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 16px 0; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; }
+  .kv span:nth-child(odd) { color: var(--dim); }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
+  button { background: var(--accent); color: #0b0d14; border: 0; border-radius: 8px; padding: 10px 16px; font: inherit; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button:disabled { opacity: .4; cursor: default; }
+  input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font: inherit; width: 160px; }
+  .table { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--dim); font-weight: 500; font-size: 13px; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); }
+  .tag.locked { color: var(--ok); border-color: var(--ok); }
+  .tag.yours { color: var(--accent); border-color: var(--accent); }
+  #status { min-height: 22px; }
+  #status.err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>LP Locker</h1>
+  <p>Locks Uniswap v4 LP positions on Base in a contract with no owner. Nobody can remove the liquidity before the unlock date. Trading fees can be collected at any time, by anyone, and always go to the beneficiary.</p>
+
+  <div class="card kv" id="lockinfo"><span>Lock</span><span class="mono">loading…</span></div>
+
+  <div class="card">
+    <div class="row" style="justify-content: space-between">
+      <div class="row"><button id="connect">Connect wallet</button><span id="account" class="mono"></span></div>
+      <div class="row"><input id="newid" placeholder="Position id" inputmode="numeric"><button class="ghost" id="add">Add</button></div>
+    </div>
+    <div class="table" style="margin-top: 12px">
+      <table>
+        <thead><tr><th>Position</th><th>Pool</th><th>Fee</th><th>Holder</th><th>Unclaimed fees</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5">loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top: 16px">
+      <button id="lock" disabled>Lock my positions</button>
+      <button id="collect" disabled>Collect all fees</button>
+      <button class="ghost" id="release" hidden>Release to beneficiary</button>
+      <button class="ghost" id="withdraw" hidden>Withdraw positions</button>
+    </div>
+    <p id="status" style="margin-top: 12px"></p>
+  </div>
+
+  <p>Locking sends each position NFT to the lock with <code>transferFrom</code>. Wallets that support batched calls (EIP-5792, e.g. MetaMask smart accounts) do it in one transaction; others ask once per position. Source: <a href="https://git.borodutch.com/backmeupplz/locker">git.borodutch.com/backmeupplz/locker</a>.</p>
+</main>
+
+<script type="module">
+import { keccak_256 } from "https://cdn.jsdelivr.net/npm/@noble/hashes@1.4.0/sha3/+esm";
+
+// ---- config ----
+const LOCK = "0x0000000000000000000000000000000000000000"; // V4PositionLock, set after deployment
+const POSITIONS = [3204056, 3204065, 3204067];
+const PM = "0x7C5f5A4bBd8fD63184577525326123B519429bDc";
+const STATE_VIEW = "0xA3c0c9b65baD0b08107Aa264b0f3dB444b867A71";
+const RPCS = ["https://mainnet.base.org", "https://base-rpc.publicnode.com"];
+const CHAIN = "0x2105";
+const SCAN = "https://basescan.org";
+
+// ---- abi helpers ----
+const $ = (id) => document.getElementById(id);
+const word = (v) => (BigInt.asUintN(256, BigInt(v))).toString(16).padStart(64, "0");
+const addr = (a) => a.toLowerCase().replace(/^0x/, "").padStart(64, "0");
+const call = (sel, ...words) => sel + words.join("");
+const words = (hex) => hex.replace(/^0x/, "").match(/.{64}/g) || [];
+const toAddr = (w) => "0x" + w.slice(24);
+const int24 = (v) => BigInt.asIntN(24, v);
+const hex = (bytes) => "0x" + [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+const keccak = (h) => hex(keccak_256(Uint8Array.from(h.match(/.{2}/g).map((x) => parseInt(x, 16)))));
+const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+const same = (a, b) => a && b && a.toLowerCase() === b.toLowerCase();
+const ZERO = "0x0000000000000000000000000000000000000000";
+
+async function rpc(batch) {
+  for (const url of RPCS) {
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(batch.map(([method, params], id) => ({ jsonrpc: "2.0", id, method, params }))) });
+      const out = await res.json();
+      if (!Array.isArray(out) || out.some((r) => r.error && !r.error.data)) throw new Error("rpc");
+      return out.sort((a, b) => a.id - b.id).map((r) => r.result ?? null);
+    } catch {}
+  }
+  throw new Error("Base RPC unavailable");
+}
+const ethCall = (to, data) => ["eth_call", [{ to, data }, "latest"]];
+
+function decodeString(h) {
+  const w = words(h);
+  if (w.length < 2) return "?";
+  const len = Number(BigInt("0x" + w[1]));
+  const bytes = h.replace(/^0x/, "").slice(128, 128 + len * 2);
+  return new TextDecoder().decode(Uint8Array.from((bytes.match(/.{2}/g) || []).map((x) => parseInt(x, 16))));
+}
+const tokens = new Map([[ZERO, { symbol: "ETH", decimals: 18 }]]);
+async function token(a) {
+  a = a.toLowerCase();
+  if (!tokens.has(a)) {
+    const [s, d] = await rpc([ethCall(a, "0x95d89b41"), ethCall(a, "0x313ce567")]);
+    tokens.set(a, { symbol: decodeString(s), decimals: Number(BigInt(d)) });
+  }
+  return tokens.get(a);
+}
+function fmt(v, decimals) {
+  const base = 10n ** BigInt(decimals), whole = v / base, frac = v % base;
+  const f = decimals ? (frac * 10000n / base).toString().padStart(4, "0").replace(/0+$/, "") : "";
+  return whole.toLocaleString("en-US") + (f ? "." + f : "");
+}
+
+// ---- state ----
+let eth, account, lockInfo = {}, positions = [];
+const ids = [...new Set([...POSITIONS, ...(new URLSearchParams(location.search).get("ids") || "").split(",").filter(Boolean).map(Number)])];
+const lockReady = LOCK !== ZERO;
+
+async function loadLock() {
+  if (!lockReady) { $("lockinfo").innerHTML = "<span>Lock</span><span>not deployed yet</span>"; return; }
+  const [b, u] = await rpc([ethCall(LOCK, "0x38af3eed"), ethCall(LOCK, "0xaa5dec6f")]);
+  lockInfo = { beneficiary: toAddr(words(b)[0]), unlockAt: Number(BigInt(u)) };
+  const date = new Date(lockInfo.unlockAt * 1000), days = Math.ceil((lockInfo.unlockAt * 1000 - Date.now()) / 864e5);
+  $("lockinfo").innerHTML = `<span>Lock</span><span class="mono"><a href="${SCAN}/address/${LOCK}">${LOCK}</a></span>
+    <span>Beneficiary</span><span class="mono"><a href="${SCAN}/address/${lockInfo.beneficiary}">${lockInfo.beneficiary}</a></span>
+    <span>Unlocks</span><span>${date.toUTCString().replace(":00 GMT", " UTC")} (${days > 0 ? `in ${days} days` : "unlocked"})</span>`;
+}
+
+async function loadPosition(id) {
+  const [owner, info] = await rpc([ethCall(PM, call("0x6352211e", word(id))), ethCall(PM, call("0x7ba03aad", word(id)))]);
+  const w = words(info);
+  const key = { c0: toAddr(w[0]), c1: toAddr(w[1]), fee: Number(BigInt("0x" + w[2])), ts: int24(BigInt("0x" + w[3])), hooks: toAddr(w[4]) };
+  const packed = BigInt("0x" + w[5]);
+  const lower = int24((packed >> 8n) & 0xffffffn), upper = int24((packed >> 32n) & 0xffffffn);
+  const poolId = keccak(w.slice(0, 5).join(""));
+  const [pos, inside] = await rpc([
+    ethCall(STATE_VIEW, call("0xdacf1d2f", poolId.slice(2), addr(PM), word(lower), word(upper), word(id))),
+    ethCall(STATE_VIEW, call("0x53e9c1fb", poolId.slice(2), word(lower), word(upper))),
+  ]);
+  const [liq, last0, last1] = words(pos).map((x) => BigInt("0x" + x)), [cur0, cur1] = words(inside).map((x) => BigInt("0x" + x));
+  const owed = (cur, last) => (BigInt.asUintN(256, cur - last) * liq) >> 128n;
+  const [t0, t1] = await Promise.all([token(key.c0), token(key.c1)]);
+  return { id, owner: toAddr(words(owner)[0]), key, t0, t1, fees0: owed(cur0, last0), fees1: owed(cur1, last1) };
+}
+
+function render() {
+  $("rows").innerHTML = positions.map((p) => {
+    if (p.error) return `<tr><td>#${p.id}</td><td colspan="4">${p.error}</td></tr>`;
+    const holder = same(p.owner, LOCK) ? `<span class="tag locked">Locked</span>`
+      : same(p.owner, account) ? `<span class="tag yours">Your wallet</span>`
+      : `<a class="mono" href="${SCAN}/address/${p.owner}">${short(p.owner)}</a>`;
+    return `<tr><td><a href="https://app.uniswap.org/positions/v4/base/${p.id}">#${p.id}</a></td>
+      <td>${p.t0.symbol} / ${p.t1.symbol}</td><td>${p.key.fee / 1e4}%</td><td>${holder}</td>
+      <td>${fmt(p.fees0, p.t0.decimals)} ${p.t0.symbol} + ${fmt(p.fees1, p.t1.decimals)} ${p.t1.symbol}</td></tr>`;
+  }).join("") || `<tr><td colspan="5">No positions</td></tr>`;
+  const mine = positions.filter((p) => !p.error && same(p.owner, account));
+  const locked = positions.filter((p) => !p.error && same(p.owner, LOCK));
+  const unlocked = lockInfo.unlockAt && Date.now() / 1000 >= lockInfo.unlockAt;
+  $("lock").textContent = mine.length ? `Lock ${mine.length} position${mine.length > 1 ? "s" : ""}` : "Lock my positions";
+  $("lock").disabled = !lockReady || !account || !mine.length || unlocked;
+  $("collect").textContent = locked.length ? `Collect fees from ${locked.length} position${locked.length > 1 ? "s" : ""}` : "Collect all fees";
+  $("collect").disabled = !account || !locked.length;
+  $("release").hidden = $("withdraw").hidden = !unlocked;
+  $("withdraw").disabled = !same(account, lockInfo.beneficiary) || !locked.length;
+}
+
+async function refresh() {
+  positions = await Promise.all(ids.map((id) => loadPosition(id).catch(() => ({ id, error: "not found" }))));
+  render();
+}
+
+// ---- wallet ----
+const status = (msg, err) => { $("status").textContent = msg; $("status").className = err ? "err" : ""; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function connect() {
+  eth = window.ethereum;
+  if (!eth) return status("No wallet found. Open this page in a browser with a wallet extension.", true);
+  [account] = await eth.request({ method: "eth_requestAccounts" });
+  try { await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: CHAIN }] }); }
+  catch { return status("Switch your wallet to Base.", true); }
+  $("account").textContent = short(account);
+  eth.on?.("accountsChanged", (a) => { account = a[0]; $("account").textContent = account ? short(account) : ""; render(); });
+  render();
+}
+
+async function receipt(hash) {
+  for (;;) {
+    const [r] = await rpc([["eth_getTransactionReceipt", [hash]]]);
+    if (r) { if (r.status !== "0x1") throw new Error("transaction reverted: " + hash); return; }
+    await sleep(1500);
+  }
+}
+
+// One atomic EIP-5792 batch when the wallet supports it, else one transaction per call.
+async function send(calls, label) {
+  calls = calls.map((c) => ({ to: c.to, data: c.data, value: "0x0" }));
+  try {
+    status(`${label}: confirm in your wallet…`);
+    const res = await eth.request({ method: "wallet_sendCalls", params: [{ version: "2.0.0", chainId: CHAIN, from: account, atomicRequired: true, calls }] });
+    const id = typeof res === "string" ? res : res.id;
+    for (;;) {
+      await sleep(1500);
+      const s = await eth.request({ method: "wallet_getCallsStatus", params: [id] });
+      const code = typeof s.status === "number" ? s.status : { PENDING: 100, CONFIRMED: 200 }[s.status] ?? 400;
+      if (code === 200) break;
+      if (code >= 400) throw new Error("batch failed");
+    }
+  } catch (e) {
+    if (e.code === 4001) throw e;
+    if (e.code !== 4200 && e.code !== -32601 && e.code !== 5700 && !/not supported|unsupported|does not exist/i.test(e.message || "")) throw e;
+    for (const [i, c] of calls.entries()) {
+      status(`${label}: confirm transaction ${i + 1} of ${calls.length}…`);
+      await receipt(await eth.request({ method: "eth_sendTransaction", params: [{ from: account, ...c }] }));
+    }
+  }
+}
+
+async function run(label, calls) {
+  try { await send(calls, label); status(`${label}: done.`); }
+  catch (e) { status(`${label}: ${e.code === 4001 ? "cancelled" : e.message}`, true); }
+  await refresh();
+}
+
+$("connect").onclick = connect;
+$("add").onclick = async () => {
+  const id = Number($("newid").value);
+  if (!Number.isSafeInteger(id) || id <= 0 || ids.includes(id)) return;
+  ids.push(id); $("newid").value = "";
+  history.replaceState(null, "", "?ids=" + ids.filter((i) => !POSITIONS.includes(i)).join(","));
+  await refresh();
+};
+$("lock").onclick = () => {
+  const mine = positions.filter((p) => !p.error && same(p.owner, account));
+  if (!confirm(`Lock ${mine.length} position(s) until ${new Date(lockInfo.unlockAt * 1000).toUTCString()}? Nobody can remove the liquidity before then.`)) return;
+  run("Lock", mine.map((p) => ({ to: PM, data: call("0x23b872dd", addr(account), addr(LOCK), word(p.id)) })));
+};
+$("collect").onclick = () => run("Collect fees",
+  positions.filter((p) => !p.error && same(p.owner, LOCK)).map((p) => ({ to: LOCK, data: call("0xb17acdcd", word(p.id)) })));
+$("release").onclick = () => run("Release", [{ to: LOCK, data: "0x8abbb9b2" }]);
+$("withdraw").onclick = () => run("Withdraw",
+  positions.filter((p) => !p.error && same(p.owner, LOCK)).map((p) => ({ to: PM, data: call("0x23b872dd", addr(LOCK), addr(account), word(p.id)) })));
+
+loadLock().then(refresh).catch((e) => status(e.message, true));
+</script>
+</body>
+</html>

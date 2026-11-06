@@ -1,0 +1,4 @@
+.plain/
+out/
+node_modules/
+.env

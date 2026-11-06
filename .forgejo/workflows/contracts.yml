@@ -1,0 +1,29 @@
+name: Contracts
+# contracts/: V4PositionLock, tested with plain (getplain.org). The fork tests run against Base.
+on:
+  pull_request:
+  push:
+    branches: [main]
+concurrency:
+  group: contracts-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  test:
+    runs-on: ${{ (github.event_name != 'pull_request' || contains(fromJSON('["backmeupplz","renovate","claude","radiant"]'), github.event.pull_request.user.login)) && 'macos-latest' || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: contracts
+      - if: runner.os == 'Linux'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --prefer-offline --no-audit --no-fund
+      - run: npx plain build --check
+      - run: npx plain test --fork base
+        env:
+          BASE_RPC_URL: https://base-rpc.publicnode.com
